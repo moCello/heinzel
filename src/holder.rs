@@ -22,8 +22,9 @@ use std::path::Path;
 use std::process::{self, Child, Command, Stdio};
 use std::time::SystemTime;
 
+use heinzel_runtime::{self as runtime, Ended, Headless, Problems, Turn, Watch};
+
 use crate::config::Config;
-use crate::runtime::{self, Ended, Headless, Turn, Watch};
 use crate::state::{Snapshot, State};
 use crate::store::{Acquired, HOME_VAR, Home, Key, Record, SessionDir, WriterLock};
 
@@ -34,10 +35,6 @@ pub const HOLD_COMMAND: &str = "hold";
 /// prints. Any other line is an error, which the line states.
 const REPORT_STARTED: &str = "started";
 const REPORT_BUSY: &str = "busy";
-
-/// The most problems a run records. A stream that is not what the adapter
-/// expects may hold a problem on every line.
-const MAX_PROBLEMS: usize = 20;
 
 /// How a launch went.
 #[derive(Debug, PartialEq, Eq)]
@@ -176,7 +173,8 @@ impl Run {
         let turn = match record.session_id.as_deref() {
             Some(session_id) => Turn::Resume { session_id },
             None => Turn::Fresh {
-                key: dir.key().as_str(),
+                name: Some(dir.key().as_str()),
+                session_id: None,
             },
         };
         let done_before = DoneMark::of(&record.done_file);
@@ -187,9 +185,10 @@ impl Run {
             model: record.model.as_deref(),
             message,
         };
+        let args = adapter.headless_args(&headless)?;
         let mut command = runtime::command(&settings.program, &record.cwd);
         command
-            .args(adapter.headless_args(&headless))
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(append_to(&dir.agent_stderr())?)
@@ -286,22 +285,7 @@ impl Run {
                     problems.add(format!("cannot write {}: {e}", dir.stream_log().display()));
                     log = None;
                 }
-                let text = String::from_utf8_lossy(&bytes);
-                let line = text.trim_end_matches(['\n', '\r']);
-                if line.is_empty() {
-                    continue;
-                }
-                let seen = match self.watch.line(line) {
-                    Ok(seen) => seen,
-                    Err(e) => {
-                        problems.add(e);
-                        continue;
-                    }
-                };
-                if let Some(problem) = seen.problem {
-                    problems.add(problem);
-                }
-                if let Some(id) = seen.session_id
+                if let Some(id) = runtime::read_line(self.watch.as_mut(), &bytes, &mut problems)
                     && self.record.session_id.as_deref() != Some(id.as_str())
                 {
                     self.record.session_id = Some(id);
@@ -335,7 +319,9 @@ fn settle(stop_requested: bool, done: bool, ended: Ended) -> State {
         return State::Done;
     }
     match ended {
-        Ended::Completed => State::Question,
+        // The state file holds no answer: the caller of a long run reads
+        // the done file and the session.
+        Ended::Completed { .. } => State::Question,
         Ended::Failed(reason) => State::Failed { reason },
         Ended::Limited { resets_at } => State::Limited { resets_at },
     }
@@ -400,30 +386,6 @@ impl DoneMark {
     }
 }
 
-/// The problems of one run, up to [`MAX_PROBLEMS`], and a count of the rest.
-#[derive(Debug, Default)]
-struct Problems {
-    list: Vec<String>,
-    more: usize,
-}
-
-impl Problems {
-    fn add(&mut self, problem: String) {
-        if self.list.len() < MAX_PROBLEMS {
-            self.list.push(problem);
-        } else {
-            self.more += 1;
-        }
-    }
-
-    fn into_list(mut self) -> Vec<String> {
-        if self.more > 0 {
-            self.list.push(format!("{} more problems", self.more));
-        }
-        self.list
-    }
-}
-
 fn append_to(path: &Path) -> Result<File, String> {
     OpenOptions::new()
         .create(true)
@@ -442,13 +404,14 @@ mod tests {
     #[test]
     fn each_ending_settles_into_its_own_state() {
         let failed = || Ended::Failed("x".to_string());
-        assert_eq!(settle(true, true, Ended::Completed), State::Stopped);
+        let completed = || Ended::Completed { answer: None };
+        assert_eq!(settle(true, true, completed()), State::Stopped);
         assert_eq!(settle(false, true, failed()), State::Done);
         assert_eq!(
             settle(false, true, Ended::Limited { resets_at: None }),
             State::Done
         );
-        assert_eq!(settle(false, false, Ended::Completed), State::Question);
+        assert_eq!(settle(false, false, completed()), State::Question);
         assert_eq!(
             settle(false, false, failed()),
             State::Failed {
@@ -482,16 +445,5 @@ mod tests {
             .unwrap();
         assert!(present.written_since(&path));
         fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn problems_past_the_cap_are_counted() {
-        let mut problems = Problems::default();
-        for n in 0..MAX_PROBLEMS + 3 {
-            problems.add(n.to_string());
-        }
-        let list = problems.into_list();
-        assert_eq!(list.len(), MAX_PROBLEMS + 1);
-        assert_eq!(list[MAX_PROBLEMS], "3 more problems");
     }
 }

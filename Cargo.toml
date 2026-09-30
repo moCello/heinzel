@@ -2,13 +2,26 @@
 name = "heinzel"
 version = "0.0.0"
 edition = "2024"
-description = "Starts, watches, continues and stops headless agent sessions."
+description = "Runs headless agent sessions: one turn for a caller that waits, or a long run to check on later."
 publish = false
 
+# The adapters for each agent CLI live in a crate of their own. The binary and
+# the library both run them, and neither exports them.
+[workspace]
+members = ["runtime"]
+
 [dependencies]
-# `setsid` for the detached holder, and `kill` for a stop.
+heinzel-runtime = { path = "runtime" }
+# `setsid` for the detached holder, `kill` for a stop, and `poll` and
+# `waitid` for a turn's time limit.
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Reading only: heinzel never writes its config file.
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+
+# The test binary is also the caller its tests start, so it has a `main` of
+# its own.
+[[test]]
+name = "caller"
+harness = false

@@ -5,6 +5,10 @@
 //! `result` event ends each turn, but not the process: a session that waits
 //! on a background task sends a `result` and lives on. So the run ends when
 //! the process exits, and the last `result` says how its last turn ended.
+//! Its `result` text is the agent's answer.
+//!
+//! A new session takes its name from `--name`, and its id from
+//! `--session-id` when the caller chose one.
 //!
 //! The init event also names the `permissionMode` that claude applied. That
 //! need not be the one the profile asked for: claude 2.1.285 runs `auto` as
@@ -37,12 +41,19 @@ impl Runtime for Claude {
         VALIDATED_VERSION
     }
 
-    fn headless_args(&self, run: &Headless<'_>) -> Vec<String> {
+    fn headless_args(&self, run: &Headless<'_>) -> Result<Vec<String>, String> {
         let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"]
             .map(String::from)
             .into();
         match run.turn {
-            Turn::Fresh { key } => args.extend(["--name".to_string(), key.to_string()]),
+            Turn::Fresh { name, session_id } => {
+                if let Some(name) = name {
+                    args.extend(["--name".to_string(), name.to_string()]);
+                }
+                if let Some(session_id) = session_id {
+                    args.extend(["--session-id".to_string(), session_id.to_string()]);
+                }
+            }
             Turn::Resume { session_id } => {
                 args.extend(["--resume".to_string(), session_id.to_string()])
             }
@@ -52,7 +63,7 @@ impl Runtime for Claude {
         }
         args.extend(run.profile.iter().cloned());
         args.extend(["--".to_string(), run.message.to_string()]);
-        args
+        Ok(args)
     }
 
     fn interactive_args(&self, session_id: &str) -> Vec<String> {
@@ -96,8 +107,9 @@ struct ClaudeWatch {
     /// The last usage-limit verdict: `Some` while the latest
     /// `rate_limit_event` rejected, with its reset time.
     rejected: Option<Option<i64>>,
-    /// How the last turn ended: `Err` with the reason when it failed.
-    last_result: Option<Result<(), String>>,
+    /// How the last turn ended: `Ok` with its answer, or `Err` with the
+    /// reason when it failed.
+    last_result: Option<Result<Option<String>, String>>,
 }
 
 impl Watch for ClaudeWatch {
@@ -135,7 +147,7 @@ impl Watch for ClaudeWatch {
     // The stream alone says how a claude run ended: no file of the session
     // is read.
     fn end(self: Box<Self>, exit: ExitStatus, _session_id: Option<&str>) -> Ended {
-        let succeeded = exit.success() && matches!(self.last_result, Some(Ok(())));
+        let succeeded = exit.success() && matches!(self.last_result, Some(Ok(_)));
         if !succeeded && let Some(resets_at) = self.rejected {
             return Ended::Limited { resets_at };
         }
@@ -147,7 +159,7 @@ impl Watch for ClaudeWatch {
             return Ended::Failed(format!("claude exited with {exit}{last}"));
         }
         match self.last_result {
-            Some(Ok(())) => Ended::Completed,
+            Some(Ok(answer)) => Ended::Completed { answer },
             Some(Err(reason)) => Ended::Failed(reason),
             None => Ended::Failed("claude exited with no result event".to_string()),
         }
@@ -173,12 +185,13 @@ event names no permissionMode"
     }
 }
 
-/// How the turn that a `result` event closes ended.
-fn turn_outcome(result: &Value) -> Result<(), String> {
+/// How the turn that a `result` event closes ended: its answer, the
+/// `result` text, when it succeeded.
+fn turn_outcome(result: &Value) -> Result<Option<String>, String> {
     let subtype = result["subtype"].as_str().unwrap_or("no subtype");
     let is_error = result["is_error"].as_bool().unwrap_or(false);
     if subtype == "success" && !is_error {
-        return Ok(());
+        return Ok(result["result"].as_str().map(str::to_string));
     }
     let detail = result["result"]
         .as_str()
@@ -214,7 +227,10 @@ mod tests {
     fn seen_under(profile: &[&str], line: &str) -> Seen {
         let profile: Vec<String> = profile.iter().map(|arg| arg.to_string()).collect();
         let mut watch = Claude.watch(&Headless {
-            turn: Turn::Fresh { key: "k" },
+            turn: Turn::Fresh {
+                name: Some("k"),
+                session_id: None,
+            },
             profile: &profile,
             model: None,
             message: "go",
@@ -235,15 +251,20 @@ mod tests {
     fn a_fresh_run_names_the_key_and_a_resume_names_the_session() {
         let profile = ["--permission-mode".to_string(), "auto".to_string()];
         let run = |turn| {
-            Claude.headless_args(&Headless {
-                turn,
-                profile: &profile,
-                model: Some("opus"),
-                message: "-go",
-            })
+            Claude
+                .headless_args(&Headless {
+                    turn,
+                    profile: &profile,
+                    model: Some("opus"),
+                    message: "-go",
+                })
+                .unwrap()
         };
         assert_eq!(
-            run(Turn::Fresh { key: "k" }),
+            run(Turn::Fresh {
+                name: Some("k"),
+                session_id: None
+            }),
             [
                 "-p",
                 "--output-format",
@@ -262,6 +283,13 @@ mod tests {
         assert_eq!(
             run(Turn::Resume { session_id: "5b1e" })[4..6],
             ["--resume", "5b1e"]
+        );
+        assert_eq!(
+            run(Turn::Fresh {
+                name: None,
+                session_id: Some("5b1e")
+            })[4..8],
+            ["--session-id", "5b1e", "--model", "opus"]
         );
     }
 
@@ -324,10 +352,29 @@ applied \"default\""
         );
     }
 
+    /// A run that completed with the answer `answer`.
+    fn answered(answer: &str) -> Ended {
+        Ended::Completed {
+            answer: Some(answer.to_string()),
+        }
+    }
+
     #[test]
-    fn a_turn_that_succeeded_completes() {
+    fn a_turn_that_succeeded_completes_with_its_answer() {
         let (watch, _) = watched(&[INIT, SUCCESS]);
-        assert_eq!(watch.end(exit(0), None), Ended::Completed);
+        assert_eq!(watch.end(exit(0), None), answered("ok"));
+    }
+
+    /// Each wait on a background task ends in a result of its own, and the
+    /// last one carries the answer the run ended with.
+    #[test]
+    fn the_answer_is_the_last_results() {
+        let later = r#"{"type":"result","subtype":"success","is_error":false,"result":"later"}"#;
+        let (watch, _) = watched(&[INIT, SUCCESS, later]);
+        assert_eq!(watch.end(exit(0), None), answered("later"));
+        let silent = r#"{"type":"result","subtype":"success","is_error":false}"#;
+        let (watch, _) = watched(&[INIT, SUCCESS, silent]);
+        assert_eq!(watch.end(exit(0), None), Ended::Completed { answer: None });
     }
 
     /// A session that waited on a background task sends a `result` for each
@@ -341,7 +388,7 @@ applied \"default\""
             Ended::Failed("claude ended its turn with error_during_execution".to_string())
         );
         let (watch, _) = watched(&[INIT, failed, SUCCESS]);
-        assert_eq!(watch.end(exit(0), None), Ended::Completed);
+        assert_eq!(watch.end(exit(0), None), answered("ok"));
     }
 
     /// `is_error` fails a turn even under the subtype `success`.
@@ -398,7 +445,7 @@ applied \"default\""
             Ended::Failed(format!("claude exited with {}", exit(1)))
         );
         let (watch, _) = watched(&[INIT, rejected, SUCCESS]);
-        assert_eq!(watch.end(exit(0), None), Ended::Completed);
+        assert_eq!(watch.end(exit(0), None), answered("ok"));
     }
 
     #[test]

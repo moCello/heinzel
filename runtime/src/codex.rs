@@ -4,7 +4,8 @@
 //! `codex exec resume --json <id>`. codex chooses the session id and names
 //! it in the `thread.started` event. It exits after its turn, and the turn
 //! finished only if a `turn.completed` event says so: codex exits 0 when the
-//! agent's own actions fail.
+//! agent's own actions fail. The text of the last `agent_message` item is
+//! the agent's answer. A new session cannot take an id its caller chose.
 //!
 //! A failed turn carries only `{ message }` in the `--json` stream, so the
 //! stream cannot tell a usage limit from any other failure. The session file
@@ -35,7 +36,17 @@ impl Runtime for Codex {
         VALIDATED_VERSION
     }
 
-    fn headless_args(&self, run: &Headless<'_>) -> Vec<String> {
+    fn headless_args(&self, run: &Headless<'_>) -> Result<Vec<String>, String> {
+        if let Turn::Fresh {
+            session_id: Some(session_id),
+            ..
+        } = run.turn
+        {
+            return Err(format!(
+                "codex chooses the id of a new session itself, so it cannot open the session \
+{session_id:?}"
+            ));
+        }
         let mut args = vec!["exec".to_string()];
         if let Turn::Resume { .. } = run.turn {
             args.push("resume".to_string());
@@ -50,7 +61,7 @@ impl Runtime for Codex {
             args.push(session_id.to_string());
         }
         args.push(run.message.to_string());
-        args
+        Ok(args)
     }
 
     fn interactive_args(&self, session_id: &str) -> Vec<String> {
@@ -153,6 +164,8 @@ struct CodexWatch {
     /// could not be read.
     resumed_from: Result<Option<(PathBuf, u64)>, String>,
     completed: bool,
+    /// The text of the last agent message.
+    answer: Option<String>,
     /// The message of the last `turn.failed` or `error` event.
     failure: Option<String>,
 }
@@ -175,6 +188,7 @@ impl CodexWatch {
             files,
             resumed_from,
             completed: false,
+            answer: None,
             failure: None,
         }
     }
@@ -214,6 +228,14 @@ impl Watch for CodexWatch {
                 };
             }
             Some("turn.completed") => self.completed = true,
+            Some("item.completed") if event["item"]["type"] == "agent_message" => {
+                match event["item"]["text"].as_str() {
+                    Some(text) => self.answer = Some(text.to_string()),
+                    None => {
+                        return Err(format!("codex's agent_message item has no text: {line}"));
+                    }
+                }
+            }
             Some("turn.failed") => self.failure = Some(message(&event["error"], line)),
             Some("error") => self.failure = Some(message(&event, line)),
             _ => {}
@@ -223,7 +245,9 @@ impl Watch for CodexWatch {
 
     fn end(self: Box<Self>, exit: ExitStatus, session_id: Option<&str>) -> Ended {
         if exit.success() && self.completed {
-            return Ended::Completed;
+            return Ended::Completed {
+                answer: self.answer,
+            };
         }
         let reason = match (&self.failure, exit.success()) {
             (Some(message), _) => format!("codex: {message}"),
@@ -345,6 +369,11 @@ mod tests {
     const FAILED: &str =
         r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}"#;
 
+    const FRESH: Turn<'static> = Turn::Fresh {
+        name: Some("k"),
+        session_id: None,
+    };
+
     #[test]
     fn a_resume_names_the_session_before_the_message() {
         let profile = ["-c".to_string(), "x=1".to_string()];
@@ -357,36 +386,68 @@ mod tests {
             })
         };
         assert_eq!(
-            run(Turn::Fresh { key: "k" }),
+            run(FRESH).unwrap(),
             ["exec", "--json", "-c", "x=1", "--", "-go"]
         );
         assert_eq!(
-            run(Turn::Resume { session_id: ID }),
+            run(Turn::Resume { session_id: ID }).unwrap(),
             ["exec", "resume", "--json", "-c", "x=1", "--", ID, "-go"]
         );
     }
 
+    /// codex names a new session itself. An id the caller chose is refused,
+    /// not dropped.
+    #[test]
+    fn a_session_id_for_a_new_session_is_refused() {
+        let error = Codex
+            .headless_args(&Headless {
+                turn: Turn::Fresh {
+                    name: None,
+                    session_id: Some(ID),
+                },
+                profile: &[],
+                model: None,
+                message: "go",
+            })
+            .unwrap_err();
+        assert!(error.contains(ID), "{error}");
+    }
+
     #[test]
     fn thread_started_names_the_session() {
-        let mut watch = CodexWatch::new(SessionFiles { root: None }, &Turn::Fresh { key: "k" });
+        let mut watch = CodexWatch::new(SessionFiles { root: None }, &FRESH);
         let seen = watch
             .line(r#"{"type":"thread.started","thread_id":"t-1"}"#)
             .unwrap();
         assert_eq!(seen.session_id.as_deref(), Some("t-1"));
     }
 
+    /// The last agent message is the answer. A reasoning item is not one.
     #[test]
-    fn a_completed_turn_completes() {
+    fn a_completed_turn_completes_with_the_last_agent_message() {
         let root = scratch("completed");
         let watch = watch_on(
             &root,
-            &Turn::Fresh { key: "k" },
+            &FRESH,
             &[
                 r#"{"type":"turn.started"}"#,
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"first"}}"#,
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"last"}}"#,
+                r#"{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}"#,
                 r#"{"type":"turn.completed","usage":{}}"#,
             ],
         );
-        assert_eq!(watch.end(exit(0), Some(ID)), Ended::Completed);
+        assert_eq!(
+            watch.end(exit(0), Some(ID)),
+            Ended::Completed {
+                answer: Some("last".to_string())
+            }
+        );
+        let watch = watch_on(&root, &FRESH, &[r#"{"type":"turn.completed","usage":{}}"#]);
+        assert_eq!(
+            watch.end(exit(0), Some(ID)),
+            Ended::Completed { answer: None }
+        );
     }
 
     /// codex exits 0 when the agent's actions fail, so only the stream says
@@ -394,11 +455,7 @@ mod tests {
     #[test]
     fn an_exit_without_turn_completed_fails() {
         let root = scratch("no-completed");
-        let watch = watch_on(
-            &root,
-            &Turn::Fresh { key: "k" },
-            &[r#"{"type":"turn.started"}"#],
-        );
+        let watch = watch_on(&root, &FRESH, &[r#"{"type":"turn.started"}"#]);
         assert_eq!(
             watch.end(exit(0), Some(ID)),
             Ended::Failed("codex ended with no turn.completed event".to_string())
@@ -409,7 +466,7 @@ mod tests {
     fn a_failed_turn_without_a_full_window_fails_with_its_message() {
         let root = scratch("failed");
         fs::write(session_file(&root), token_count(62.0, 1_790_000_000) + "\n").unwrap();
-        let watch = watch_on(&root, &Turn::Fresh { key: "k" }, &[FAILED]);
+        let watch = watch_on(&root, &FRESH, &[FAILED]);
         assert_eq!(
             watch.end(exit(1), Some(ID)),
             Ended::Failed("codex: You've hit your usage limit.".to_string())
@@ -425,7 +482,7 @@ mod tests {
             token_count(62.0, 1) + "\n" + &token_count(100.0, 1_790_000_000) + "\n",
         )
         .unwrap();
-        let watch = watch_on(&root, &Turn::Fresh { key: "k" }, &[FAILED]);
+        let watch = watch_on(&root, &FRESH, &[FAILED]);
         assert_eq!(
             watch.end(exit(1), Some(ID)),
             Ended::Limited {

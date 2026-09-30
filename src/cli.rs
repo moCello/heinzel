@@ -8,9 +8,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use heinzel_runtime::RuntimeName;
+
 use crate::config::DEFAULT_PROFILE;
 use crate::holder::{self, HOLD_COMMAND};
-use crate::runtime::RuntimeName;
 use crate::session::{self, Report, StartSpec};
 use crate::store::{Home, Key};
 

@@ -22,9 +22,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
+use heinzel_runtime::RuntimeName;
 use serde::Deserialize;
 
-use crate::runtime::RuntimeName;
 use crate::store::Home;
 
 /// The profile a start uses when it names none.
@@ -100,8 +100,8 @@ impl Config {
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
         Ok(Self {
-            claude: RuntimeName::Claude.built_in().apply(file.claude),
-            codex: RuntimeName::Codex.built_in().apply(file.codex),
+            claude: built_in(RuntimeName::Claude).apply(file.claude),
+            codex: built_in(RuntimeName::Codex).apply(file.codex),
         })
     }
 
@@ -113,39 +113,37 @@ impl Config {
     }
 }
 
-impl RuntimeName {
-    /// The settings of this runtime when the file changes none.
-    fn built_in(self) -> RuntimeConfig {
-        let (program, auto, no_checks): (&str, &[&str], &[&str]) = match self {
-            RuntimeName::Claude => (
-                "claude",
-                &["--permission-mode", "auto", "--permission-prompts", "none"],
-                &["--dangerously-skip-permissions"],
-            ),
-            // These are the settings that `codex exec --approve-for-me` sets.
-            // `codex exec resume` has no such flag but takes `-c`, so the
-            // settings reach a start and a resume alike.
-            RuntimeName::Codex => (
-                "codex",
-                &[
-                    "-c",
-                    r#"approvals_reviewer="auto_review""#,
-                    "-c",
-                    r#"approval_policy="on-request""#,
-                    "-c",
-                    r#"sandbox_mode="workspace-write""#,
-                ],
-                &["--dangerously-bypass-approvals-and-sandbox"],
-            ),
-        };
-        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect();
-        RuntimeConfig {
-            program: PathBuf::from(program),
-            profiles: BTreeMap::from([
-                (DEFAULT_PROFILE.to_string(), args(auto)),
-                (NO_CHECKS_PROFILE.to_string(), args(no_checks)),
-            ]),
-        }
+/// The settings of `runtime` when the file changes none.
+fn built_in(runtime: RuntimeName) -> RuntimeConfig {
+    let (program, auto, no_checks): (&str, &[&str], &[&str]) = match runtime {
+        RuntimeName::Claude => (
+            "claude",
+            &["--permission-mode", "auto", "--permission-prompts", "none"],
+            &["--dangerously-skip-permissions"],
+        ),
+        // These are the settings that `codex exec --approve-for-me` sets.
+        // `codex exec resume` has no such flag but takes `-c`, so the
+        // settings reach a start and a resume alike.
+        RuntimeName::Codex => (
+            "codex",
+            &[
+                "-c",
+                r#"approvals_reviewer="auto_review""#,
+                "-c",
+                r#"approval_policy="on-request""#,
+                "-c",
+                r#"sandbox_mode="workspace-write""#,
+            ],
+            &["--dangerously-bypass-approvals-and-sandbox"],
+        ),
+    };
+    let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect();
+    RuntimeConfig {
+        program: PathBuf::from(program),
+        profiles: BTreeMap::from([
+            (DEFAULT_PROFILE.to_string(), args(auto)),
+            (NO_CHECKS_PROFILE.to_string(), args(no_checks)),
+        ]),
     }
 }
 

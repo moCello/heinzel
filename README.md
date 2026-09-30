@@ -1,7 +1,9 @@
 # heinzel
 
 heinzel starts, watches, continues and stops headless agent sessions. It runs
-`claude` and `codex`.
+`claude` and `codex`. The binary serves a long run that a caller checks on
+later. The library runs one turn for a caller that waits for it: see
+[Library](#library).
 
 A caller names each session by a key. heinzel gives the key no meaning. It
 knows keys, runtimes and processes, and nothing about the work.
@@ -105,6 +107,46 @@ claude reports a usage limit in its stream, with its reset time. codex
 reports only a message in its `--json` stream. heinzel reads the limit and
 its reset time from the rate limits that codex records in its session file,
 under `$CODEX_HOME/sessions`.
+
+## Library
+
+`heinzel::run` runs one turn and returns when it ends. A `heinzel::Turn`
+names all of it:
+
+- the runtime and the program to run,
+- the directory the agent runs in,
+- the session: a new one, or a resume of a named one. claude takes an id
+  for a new session. codex chooses its own, and a turn that names one is
+  refused.
+- the model, or none for the CLI's default,
+- the arguments that set what the agent may do. heinzel puts them on the
+  command line as given, and adds no permission of its own.
+- the time limit. It must be above zero. At the limit, heinzel sends
+  `SIGTERM` to the turn's process group, and `SIGKILL` 5 seconds later.
+- the message.
+
+The report says that the turn finished, with the session id and the agent's
+final answer. Or it says that the turn hit a usage limit, with the reset when
+the runtime names it. Or it says that the turn failed, and why. Its
+`problems` list what went wrong without ending the turn.
+
+Each turn runs in a process group of its own. When the agent exits, heinzel
+kills what is left of the group, so no process in the group outlives the
+turn.
+
+A turn also stops when its caller dies, for any reason: a Ctrl-C at the
+caller's terminal, a `SIGKILL`, a crash. A guard process leads the turn's
+group. It is `/bin/sh`, so the caller needs no heinzel binary. The guard
+reads a pipe whose write end only the caller's process holds. When the
+caller dies, the pipe closes, and the guard sends the group `SIGTERM`, then
+`SIGKILL` 5 seconds later. The guard ignores the Ctrl-C that ends the caller.
+The caller does nothing for any of this.
+
+A process that leaves the group through `setsid` or `setpgid` gets no
+signal, from heinzel or from the guard.
+
+A turn writes nothing under `$HEINZEL_HOME`. `heinzel::version_note` says
+when the installed CLI is not the version heinzel was validated against.
 
 ## Development
 

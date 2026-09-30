@@ -1,8 +1,9 @@
 //! The adapters against the real CLIs.
 //!
 //! Each adapter rests on facts about a CLI heinzel does not own: its flags,
-//! its stream, and where it reports the session id. These tests run the real
-//! `claude` and `codex` on the built-in config, so they need each CLI and its
+//! its stream, and where it reports the session id and the answer. These
+//! tests run the real `claude` and `codex`, through the binary on the
+//! built-in config and through a library turn. So they need each CLI and its
 //! login, and each run uses the account's usage. They are `#[ignore]`d:
 //! `make boundary` runs them, and `make cq` leaves them out.
 //!
@@ -10,10 +11,13 @@
 //! `PATH`. A usage limit is not provoked here. Its classification rests on
 //! the unit tests and the stub tests.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
+use heinzel::{Outcome, Runtime, Session, Turn};
 use serde_json::Value;
 
 /// A scratch home and working directory for one live test.
@@ -121,4 +125,108 @@ fn claude_starts_and_continues() {
 #[ignore = "runs the real codex CLI and uses the account's usage"]
 fn codex_starts_and_continues() {
     start_then_continue("codex", None);
+}
+
+/// A library turn in a new session finishes with an answer. A second turn
+/// resumes that session and finishes in it. `turn` is the first turn, and
+/// its session names the id the caller chose, if any.
+fn turn_then_resume(mut turn: Turn) {
+    let chosen = match &turn.session {
+        Session::New { id } => id.clone(),
+        Session::Resume { .. } => None,
+    };
+    let first = heinzel::run(&turn).unwrap();
+    assert_eq!(first.problems, Vec::<String>::new(), "{first:?}");
+    let Outcome::Finished { session_id, answer } = first.outcome else {
+        panic!("the first turn did not finish: {first:?}");
+    };
+    if let Some(chosen) = chosen {
+        assert_eq!(session_id, chosen);
+    }
+    assert!(
+        answer.is_some_and(|answer| answer.to_lowercase().contains("ok")),
+        "{session_id}"
+    );
+
+    turn.session = Session::Resume {
+        id: session_id.clone(),
+    };
+    turn.message = "Reply with the word yes. Do nothing else.".to_string();
+    let second = heinzel::run(&turn).unwrap();
+    assert_eq!(second.problems, Vec::<String>::new(), "{second:?}");
+    let Outcome::Finished {
+        session_id: resumed,
+        answer,
+    } = second.outcome
+    else {
+        panic!("the resume did not finish: {second:?}");
+    };
+    assert_eq!(resumed, session_id);
+    assert!(
+        answer.is_some_and(|answer| answer.to_lowercase().contains("yes")),
+        "{resumed}"
+    );
+}
+
+/// A turn on `runtime` in the work directory of `live`, with `args`.
+fn turn_on(live: &Live, runtime: Runtime, program: &str, args: &[&str]) -> Turn {
+    Turn {
+        runtime,
+        program: PathBuf::from(program),
+        cwd: live.work(),
+        session: Session::New { id: None },
+        model: None,
+        args: args.iter().map(|arg| arg.to_string()).collect(),
+        time_limit: Duration::from_secs(300),
+        message: "Reply with the word ok. Do nothing else.".to_string(),
+    }
+}
+
+/// A random UUID v4, for a session id the caller chooses.
+fn new_uuid() -> String {
+    let mut bytes = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .unwrap();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+#[test]
+#[ignore = "runs the real claude CLI and uses the account's usage"]
+fn a_claude_turn_answers_and_resumes() {
+    let live = Live::new("turn-claude");
+    let mut turn = turn_on(
+        &live,
+        Runtime::Claude,
+        "claude",
+        &["--permission-mode", "dontAsk"],
+    );
+    turn.model = Some("sonnet".to_string());
+    turn.session = Session::New {
+        id: Some(new_uuid()),
+    };
+    turn_then_resume(turn);
+}
+
+#[test]
+#[ignore = "runs the real codex CLI and uses the account's usage"]
+fn a_codex_turn_answers_and_resumes() {
+    let live = Live::new("turn-codex");
+    let turn = turn_on(
+        &live,
+        Runtime::Codex,
+        "codex",
+        &["-c", r#"sandbox_mode="read-only""#],
+    );
+    turn_then_resume(turn);
 }

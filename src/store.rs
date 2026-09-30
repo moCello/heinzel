@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use heinzel_runtime::RuntimeName;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::RuntimeName;
 use crate::state::Snapshot;
 
 /// The variable that names the home directory. Without it the home is

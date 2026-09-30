@@ -8,19 +8,19 @@ cq: fmt-check clippy test
 
 # Rewrite source to canonical formatting.
 fmt:
-	cargo fmt
+	cargo fmt --all
 
 # Fail if any file is not canonically formatted.
 fmt-check:
-	cargo fmt --check
+	cargo fmt --all --check
 
-# Lint all targets; deny every warning.
+# Lint every crate and target; deny every warning.
 clippy:
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 # Run the test suite. It runs a stub in place of every agent CLI.
 test:
-	cargo test
+	cargo test --workspace
 
 # Run the real agent CLIs: claude and codex. Each run uses the account's
 # usage, so `cq` leaves them out and lists them as ignored.

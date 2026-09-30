@@ -6,15 +6,16 @@
 //! - [`store`] keeps what heinzel knows about each key on disk.
 //! - [`state`] is the state of a session, which only a lock holder writes.
 //! - [`config`] reads the programs and permission profiles.
-//! - [`runtime`] holds one adapter per agent CLI.
 //! - [`holder`] is the detached process that owns an agent run.
 //! - [`session`] is what a caller does to a session.
 //! - [`cli`] parses the command line.
+//!
+//! The adapter for each agent CLI lives in the `heinzel-runtime` crate,
+//! which the heinzel library runs too.
 
 mod cli;
 mod config;
 mod holder;
-mod runtime;
 mod session;
 mod state;
 mod store;

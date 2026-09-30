@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use heinzel_runtime::{self as runtime, RuntimeName};
 use serde::Serialize;
 
 use crate::config::Config;
 use crate::holder::{self, Launch};
-use crate::runtime::{self, RuntimeName};
 use crate::state::{Snapshot, State};
 use crate::store::{Acquired, Home, Key, Record, SessionDir, WriterLock};
 
