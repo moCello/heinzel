@@ -7,10 +7,16 @@
 //! login, and each run uses the account's usage. They are `#[ignore]`d:
 //! `make boundary` runs them, and `make cq` leaves them out.
 //!
-//! A pass says the adapter's validated version still holds for the CLI on
-//! `PATH`. A usage limit is not provoked here. Its classification rests on
-//! the unit tests and the stub tests.
+//! One test per runtime runs every scenario for that runtime. When all of
+//! them pass, the test writes the version of the CLI on `PATH` to the
+//! directory that `$BOUNDARY_RECORD` names, when it names one. After every
+//! test passed, `make boundary` copies that record to `runtime/validated/`.
+//! The adapter compiles it in as the version it was validated against.
+//!
+//! A usage limit is not provoked here. Its classification rests on the unit
+//! tests and the stub tests.
 
+use std::env;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -18,6 +24,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use heinzel::{Outcome, Runtime, Session, Turn};
+use heinzel_runtime::{RuntimeName, installed_version};
 use serde_json::Value;
 
 /// A scratch home and working directory for one live test.
@@ -27,7 +34,7 @@ struct Live {
 
 impl Live {
     fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("heinzel-live-{tag}-{}", std::process::id()));
+        let root = env::temp_dir().join(format!("heinzel-live-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("home")).unwrap();
         fs::create_dir_all(root.join("work")).unwrap();
@@ -65,6 +72,24 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Run `scenarios` on the CLI of `runtime` on `PATH`. Then write its version
+/// to `$BOUNDARY_RECORD`, when that names a directory. A CLI whose version
+/// changed during the run fails the test.
+fn validate(runtime: RuntimeName, scenarios: impl FnOnce()) {
+    let name = runtime.as_str();
+    let program = Path::new(name);
+    let before = installed_version(program).unwrap();
+    scenarios();
+    let after = installed_version(program).unwrap();
+    assert_eq!(after, before, "{name} changed its version during the run");
+
+    if let Some(record) = env::var_os("BOUNDARY_RECORD") {
+        let record = PathBuf::from(record);
+        fs::create_dir_all(&record).unwrap();
+        fs::write(record.join(name), format!("{after}\n")).unwrap();
     }
 }
 
@@ -109,22 +134,6 @@ fn start_then_continue(runtime: &str, model: Option<&str>) {
     assert_eq!(second["state"], "question", "{second}");
     assert_eq!(second["session_id"], first["session_id"], "{second}");
     assert_eq!(second.get("problems"), None, "{second}");
-}
-
-#[test]
-#[ignore = "runs the real claude CLI and uses the account's usage"]
-fn claude_starts_and_continues() {
-    // claude 2.1.285 does not apply `--permission-mode auto` on haiku: its
-    // init event says `default`, the write asks for a prompt, and nobody
-    // answers it. sonnet applies `auto`. A run in another mode fails the
-    // test through the problem it reports.
-    start_then_continue("claude", Some("sonnet"));
-}
-
-#[test]
-#[ignore = "runs the real codex CLI and uses the account's usage"]
-fn codex_starts_and_continues() {
-    start_then_continue("codex", None);
 }
 
 /// A library turn in a new session finishes with an answer. A second turn
@@ -203,30 +212,42 @@ fn new_uuid() -> String {
 
 #[test]
 #[ignore = "runs the real claude CLI and uses the account's usage"]
-fn a_claude_turn_answers_and_resumes() {
-    let live = Live::new("turn-claude");
-    let mut turn = turn_on(
-        &live,
-        Runtime::Claude,
-        "claude",
-        &["--permission-mode", "dontAsk"],
-    );
-    turn.model = Some("sonnet".to_string());
-    turn.session = Session::New {
-        id: Some(new_uuid()),
-    };
-    turn_then_resume(turn);
+fn the_claude_adapter_holds() {
+    validate(RuntimeName::Claude, || {
+        // claude 2.1.285 does not apply `--permission-mode auto` on haiku:
+        // its init event says `default`, the write asks for a prompt, and
+        // nobody answers it. sonnet applies `auto`. A run in another mode
+        // fails the test through the problem it reports.
+        start_then_continue("claude", Some("sonnet"));
+
+        let live = Live::new("turn-claude");
+        let mut turn = turn_on(
+            &live,
+            Runtime::Claude,
+            "claude",
+            &["--permission-mode", "dontAsk"],
+        );
+        turn.model = Some("sonnet".to_string());
+        turn.session = Session::New {
+            id: Some(new_uuid()),
+        };
+        turn_then_resume(turn);
+    });
 }
 
 #[test]
 #[ignore = "runs the real codex CLI and uses the account's usage"]
-fn a_codex_turn_answers_and_resumes() {
-    let live = Live::new("turn-codex");
-    let turn = turn_on(
-        &live,
-        Runtime::Codex,
-        "codex",
-        &["-c", r#"sandbox_mode="read-only""#],
-    );
-    turn_then_resume(turn);
+fn the_codex_adapter_holds() {
+    validate(RuntimeName::Codex, || {
+        start_then_continue("codex", None);
+
+        let live = Live::new("turn-codex");
+        let turn = turn_on(
+            &live,
+            Runtime::Codex,
+            "codex",
+            &["-c", r#"sandbox_mode="read-only""#],
+        );
+        turn_then_resume(turn);
+    });
 }

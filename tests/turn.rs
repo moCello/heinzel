@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 
 use heinzel::{Outcome, Report, Runtime, Session, Turn};
 
+mod versions;
+
+use versions::{claude_version, codex_version, other_claude_version};
+
 const INIT: &str =
     r#"{"type":"system","subtype":"init","session_id":"s-1","permissionMode":"dontAsk"}"#;
 const ANSWER: &str =
@@ -145,7 +149,7 @@ fn pid_in(path: &PathBuf) -> i32 {
 /// about permissions does.
 #[test]
 fn a_claude_turn_finishes_with_its_session_and_answer() {
-    let stub = Stub::new("claude", "2.1.285 (Claude Code)", &prints(&[INIT, ANSWER]));
+    let stub = Stub::new("claude", &claude_version(), &prints(&[INIT, ANSWER]));
     let mut turn = stub.claude();
     turn.model = Some("sonnet".to_string());
     turn.message = "-go".to_string();
@@ -172,11 +176,7 @@ fn a_claude_turn_finishes_with_its_session_and_answer() {
 /// names the session it continues.
 #[test]
 fn a_claude_turn_takes_the_session_the_caller_names() {
-    let stub = Stub::new(
-        "claude-ids",
-        "2.1.285 (Claude Code)",
-        &prints(&[INIT, ANSWER]),
-    );
+    let stub = Stub::new("claude-ids", &claude_version(), &prints(&[INIT, ANSWER]));
     let mut turn = stub.claude();
     turn.session = Session::New {
         id: Some("s-1".to_string()),
@@ -200,11 +200,7 @@ fn a_claude_turn_takes_the_session_the_caller_names() {
 /// A session other than the one the turn asked for is no silent success.
 #[test]
 fn another_session_than_the_one_asked_for_is_a_problem() {
-    let stub = Stub::new(
-        "claude-other",
-        "2.1.285 (Claude Code)",
-        &prints(&[INIT, ANSWER]),
-    );
+    let stub = Stub::new("claude-other", &claude_version(), &prints(&[INIT, ANSWER]));
     let mut turn = stub.claude();
     turn.session = Session::Resume {
         id: "s-0".to_string(),
@@ -220,7 +216,7 @@ fn another_session_than_the_one_asked_for_is_a_problem() {
 fn a_codex_turn_finishes_with_the_last_agent_message() {
     let stub = Stub::new(
         "codex",
-        "codex-cli 0.159.0",
+        &codex_version(),
         &prints(&[
             r#"{"type":"thread.started","thread_id":"t-1"}"#,
             r#"{"type":"item.completed","item":{"type":"agent_message","text":"the answer"}}"#,
@@ -248,7 +244,7 @@ fn a_codex_turn_finishes_with_the_last_agent_message() {
 /// before anything runs.
 #[test]
 fn a_codex_turn_with_a_chosen_session_id_is_refused() {
-    let stub = Stub::new("codex-id", "codex-cli 0.159.0", "");
+    let stub = Stub::new("codex-id", &codex_version(), "");
     let mut turn = stub.claude();
     turn.runtime = Runtime::Codex;
     turn.session = Session::New {
@@ -261,7 +257,7 @@ fn a_codex_turn_with_a_chosen_session_id_is_refused() {
 
 #[test]
 fn a_turn_without_a_time_limit_is_refused() {
-    let stub = Stub::new("no-limit", "2.1.285 (Claude Code)", "");
+    let stub = Stub::new("no-limit", &claude_version(), "");
     let mut turn = stub.claude();
     turn.time_limit = Duration::ZERO;
     let error = heinzel::run(&turn).unwrap_err();
@@ -280,7 +276,7 @@ fn a_turn_without_a_time_limit_is_refused() {
 /// own.
 #[test]
 fn a_turn_past_its_time_limit_fails() {
-    let stub = Stub::new("limit", "2.1.285 (Claude Code)", "exec sleep 300");
+    let stub = Stub::new("limit", &claude_version(), "exec sleep 300");
     let mut turn = stub.claude();
     turn.time_limit = Duration::from_millis(500);
     let started = Instant::now();
@@ -297,7 +293,7 @@ fn a_turn_past_its_time_limit_fails() {
 /// agent's stdout open, and the turn still ends when the agent exits.
 #[test]
 fn a_process_the_agent_left_behind_ends_with_the_turn() {
-    let stub = Stub::new("leftover", "2.1.285 (Claude Code)", "");
+    let stub = Stub::new("leftover", &claude_version(), "");
     let child_pid = stub.root.join("child.pid");
     fs::write(
         stub.program(),
@@ -331,7 +327,7 @@ fn a_claude_usage_limit_is_a_limit_with_its_reset() {
     let error = r#"{"type":"result","subtype":"success","is_error":true,"result":"limit"}"#;
     let stub = Stub::new(
         "usage",
-        "2.1.285 (Claude Code)",
+        &claude_version(),
         &format!("{}\nexit 1", prints(&[INIT, rejected, error])),
     );
     let report = run(&stub.claude());
@@ -349,7 +345,7 @@ fn a_claude_usage_limit_is_a_limit_with_its_reset() {
 fn a_failed_turn_says_why() {
     let stub = Stub::new(
         "failed",
-        "2.1.285 (Claude Code)",
+        &claude_version(),
         &format!("{}\necho 'Invalid API key' >&2\nexit 3", prints(&[INIT])),
     );
     let reason = failure(&run(&stub.claude())).to_string();
@@ -365,7 +361,7 @@ fn a_failed_turn_says_why() {
 fn an_unreadable_line_is_a_problem() {
     let stub = Stub::new(
         "unreadable",
-        "2.1.285 (Claude Code)",
+        &claude_version(),
         &prints(&[INIT, "Loading...", ANSWER]),
     );
     let report = run(&stub.claude());
@@ -379,7 +375,7 @@ fn an_unreadable_line_is_a_problem() {
 
 #[test]
 fn a_program_that_cannot_start_is_an_error() {
-    let stub = Stub::new("missing", "2.1.285 (Claude Code)", "");
+    let stub = Stub::new("missing", &claude_version(), "");
     let mut turn = stub.claude();
     turn.program = stub.root.join("no-such-agent");
     let error = heinzel::run(&turn).unwrap_err();
@@ -388,10 +384,11 @@ fn a_program_that_cannot_start_is_an_error() {
 
 #[test]
 fn another_cli_version_gets_a_note() {
-    let stub = Stub::new("version", "2.0.0 (Claude Code)", "");
+    let (other, output) = other_claude_version();
+    let stub = Stub::new("version", &output, "");
     let note = heinzel::version_note(Runtime::Claude, &stub.program()).unwrap();
-    assert!(note.contains("\"2.0.0\""), "{note}");
-    let stub = Stub::new("same-version", "2.1.285 (Claude Code)", "");
+    assert!(note.contains(&format!("{other:?}")), "{note}");
+    let stub = Stub::new("same-version", &claude_version(), "");
     assert_eq!(
         heinzel::version_note(Runtime::Claude, &stub.program()),
         None

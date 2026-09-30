@@ -152,3 +152,10 @@ when the installed CLI is not the version heinzel was validated against.
 
     make cq        # format check, clippy, tests: every agent is a stub
     make boundary  # the real claude and codex CLIs: uses your usage
+
+heinzel runs on any version of claude and codex. On a version it was not
+validated against, it warns. A version is validated when `make boundary`
+passes on it. When every boundary test passes, `make boundary` writes the
+version of each CLI on `PATH` to `runtime/validated/<runtime>`, and the next
+build compiles it in. So a new CLI release needs one `make boundary` and a
+commit of those files, not a change to the code.

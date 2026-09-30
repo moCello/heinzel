@@ -105,7 +105,8 @@ pub enum Ended {
 
 /// One agent CLI.
 pub trait Runtime: Sync {
-    /// The CLI version this adapter was validated against.
+    /// The CLI version this adapter was validated against: the last one
+    /// `make boundary` passed on.
     fn validated_version(&self) -> &'static str;
 
     /// The arguments of a headless run. A run this CLI cannot do as asked is
@@ -210,42 +211,44 @@ pub fn command(program: &Path, cwd: &Path) -> Command {
 /// says so. It never refuses.
 pub fn version_note(program: &Path, runtime: RuntimeName) -> Option<String> {
     let validated = runtime.adapter().validated_version();
-    let shown = program.display();
-    let output = match Command::new(program).arg("--version").output() {
-        Ok(output) if output.status.success() => output,
-        Ok(output) => {
-            return Some(format!(
-                "`{shown} --version` failed ({}): the {} adapter was validated against \
-{validated}",
-                output.status,
-                runtime.as_str()
-            ));
-        }
-        Err(e) => {
-            return Some(format!(
-                "cannot run `{shown} --version` ({e}): the {} adapter was validated against \
-{validated}",
-                runtime.as_str()
-            ));
-        }
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let installed = installed_version(&text);
-    if installed == Some(validated) {
-        return None;
+    let name = runtime.as_str();
+    match installed_version(program) {
+        Ok(installed) if installed == validated => None,
+        Ok(installed) => Some(format!(
+            "`{} --version` says {installed:?}, and the {name} adapter was validated against \
+{validated}: its flags or its output may have changed",
+            program.display()
+        )),
+        Err(e) => Some(format!(
+            "{e}: the {name} adapter was validated against {validated}"
+        )),
     }
-    Some(format!(
-        "`{shown} --version` says {:?}, and the {} adapter was validated against {validated}: \
-its flags or its output may have changed",
-        installed.unwrap_or(text.trim()),
-        runtime.as_str()
-    ))
+}
+
+/// The version number that `program --version` prints. The error says why
+/// there is none.
+pub fn installed_version(program: &Path) -> Result<String, String> {
+    let shown = program.display();
+    let output = Command::new(program)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("cannot run `{shown} --version` ({e})"))?;
+    if !output.status.success() {
+        return Err(format!("`{shown} --version` failed ({})", output.status));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    version_number(&text).map(String::from).ok_or_else(|| {
+        format!(
+            "`{shown} --version` says {:?}, which holds no version number",
+            text.trim()
+        )
+    })
 }
 
 /// The version number in a CLI's `--version` output: the first word that
 /// starts with a digit and holds a dot. claude prints `2.1.285 (Claude Code)`,
 /// and codex prints `codex-cli 0.159.0`.
-fn installed_version(output: &str) -> Option<&str> {
+fn version_number(output: &str) -> Option<&str> {
     output
         .split_whitespace()
         .find(|word| word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
@@ -257,12 +260,17 @@ mod tests {
 
     #[test]
     fn the_version_is_read_out_of_each_clis_output() {
-        assert_eq!(
-            installed_version("2.1.285 (Claude Code)\n"),
-            Some("2.1.285")
-        );
-        assert_eq!(installed_version("codex-cli 0.159.0\n"), Some("0.159.0"));
-        assert_eq!(installed_version("no version here\n"), None);
+        assert_eq!(version_number("2.1.285 (Claude Code)\n"), Some("2.1.285"));
+        assert_eq!(version_number("codex-cli 0.159.0\n"), Some("0.159.0"));
+        assert_eq!(version_number("no version here\n"), None);
+    }
+
+    #[test]
+    fn each_validated_version_is_a_version_number() {
+        for runtime in [RuntimeName::Claude, RuntimeName::Codex] {
+            let validated = runtime.adapter().validated_version();
+            assert_eq!(version_number(validated), Some(validated), "{runtime:?}");
+        }
     }
 
     #[test]

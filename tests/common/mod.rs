@@ -185,5 +185,3 @@ pub fn claude_stream_in(mode: &str, lines: &[&str]) -> String {
 }
 
 pub const CLAUDE_SUCCESS: &str = r#"{"type":"result","subtype":"success","is_error":false}"#;
-pub const CLAUDE_VERSION: &str = "2.1.285 (Claude Code)";
-pub const CODEX_VERSION: &str = "codex-cli 0.159.0";

@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 mod common;
+mod versions;
 
-use common::{
-    Bench, CLAUDE_SUCCESS, CLAUDE_VERSION, CODEX_VERSION, claude_stream, claude_stream_in,
-};
+use common::{Bench, CLAUDE_SUCCESS, claude_stream, claude_stream_in};
+use heinzel_runtime::RuntimeName;
+use versions::{claude_version, codex_version, other_claude_version};
 
 /// A stub body that keeps the agent alive until a stop.
 const LINGER: &str = "sleep 30";
@@ -36,7 +37,7 @@ fn a_run_that_writes_the_done_file_is_done() {
     let bench = Bench::new("done");
     let done = bench.done_file.display().to_string();
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!("{}\ntouch '{done}'", claude_stream(&[CLAUDE_SUCCESS])),
     );
     let started = bench.start("job", "claude");
@@ -58,7 +59,7 @@ fn a_run_that_writes_the_done_file_is_done() {
 #[test]
 fn a_run_that_finishes_without_the_done_file_is_a_question() {
     let bench = Bench::new("question");
-    bench.agent(CLAUDE_VERSION, &claude_stream(&[CLAUDE_SUCCESS]));
+    bench.agent(&claude_version(), &claude_stream(&[CLAUDE_SUCCESS]));
     bench.start("job", "claude");
     assert_eq!(state(&bench.ok(&["wait", "job"])), "question");
 }
@@ -67,7 +68,7 @@ fn a_run_that_finishes_without_the_done_file_is_a_question() {
 fn a_run_that_exits_nonzero_failed() {
     let bench = Bench::new("failed");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!("{}\nexit 3", claude_stream(&[CLAUDE_SUCCESS])),
     );
     bench.start("job", "claude");
@@ -83,7 +84,7 @@ fn a_run_that_exits_nonzero_failed() {
 fn a_rejected_claude_rate_limit_is_a_limit() {
     let bench = Bench::new("claude-limit");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!(
             "{}\nexit 1",
             claude_stream(&[
@@ -109,7 +110,7 @@ fn codex_failing_at(bench: &Bench, used: f64) {
         r#"{{"timestamp":"2026-09-30T12:00:01Z","type":"event_msg","payload":{{"type":"token_count","info":null,"rate_limits":{{"primary":{{"used_percent":{used},"window_minutes":300,"resets_at":1790000000}},"secondary":null}}}}}}"#
     );
     bench.agent(
-        CODEX_VERSION,
+        &codex_version(),
         &format!(
             "mkdir -p '{day}'\n\
              echo '{record}' >> '{file}'\n\
@@ -151,7 +152,7 @@ fn a_codex_failure_below_the_limit_failed() {
 fn a_stop_ends_a_run_that_outlives_its_result() {
     let bench = Bench::new("stop");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!("{}\n{LINGER}", claude_stream(&[CLAUDE_SUCCESS])),
     );
     bench.start("job", "claude");
@@ -170,7 +171,10 @@ fn a_stop_ends_a_run_that_outlives_its_result() {
 #[test]
 fn a_continue_is_refused_while_a_run_holds_the_session() {
     let bench = Bench::new("continue-busy");
-    bench.agent(CLAUDE_VERSION, &format!("{}\n{LINGER}", claude_stream(&[])));
+    bench.agent(
+        &claude_version(),
+        &format!("{}\n{LINGER}", claude_stream(&[])),
+    );
     bench.start("job", "claude");
     let refusal = bench.refused(&["continue", "job", "--message", "again"]);
     assert!(refusal.contains("has a writer already"), "{refusal}");
@@ -182,7 +186,10 @@ fn a_continue_is_refused_while_a_run_holds_the_session() {
 #[test]
 fn an_open_is_refused_while_a_run_holds_the_session() {
     let bench = Bench::new("open-busy");
-    bench.agent(CLAUDE_VERSION, &format!("{}\n{LINGER}", claude_stream(&[])));
+    bench.agent(
+        &claude_version(),
+        &format!("{}\n{LINGER}", claude_stream(&[])),
+    );
     bench.start("job", "claude");
     bench.await_file(&bench.home.join("sessions/job/stream.jsonl"));
     let refusal = bench.refused(&["open", "job"]);
@@ -197,7 +204,7 @@ fn an_open_is_refused_while_a_run_holds_the_session() {
 #[test]
 fn a_stopped_session_can_be_continued_and_opened() {
     let bench = Bench::new("reachable");
-    bench.agent(CLAUDE_VERSION, &claude_stream(&[CLAUDE_SUCCESS]));
+    bench.agent(&claude_version(), &claude_stream(&[CLAUDE_SUCCESS]));
     bench.start("job", "claude");
     bench.ok(&["wait", "job"]);
     let resumed = bench.ok(&["continue", "job", "--message", "and now?"]);
@@ -221,7 +228,7 @@ fn a_stopped_session_can_be_continued_and_opened() {
 fn a_codex_continue_names_the_session_codex_chose() {
     let bench = Bench::new("codex-resume");
     bench.agent(
-        CODEX_VERSION,
+        &codex_version(),
         &format!(
             "echo '{{\"type\":\"thread.started\",\"thread_id\":\"{CODEX_ID}\"}}'\n\
              echo '{{\"type\":\"turn.completed\",\"usage\":{{}}}}'"
@@ -245,7 +252,7 @@ fn a_codex_continue_names_the_session_codex_chose() {
 fn the_no_checks_profile_runs_only_when_a_start_names_it() {
     let bench = Bench::new("no-checks");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &claude_stream_in("bypassPermissions", &[CLAUDE_SUCCESS]),
     );
     let done = bench.done_file.display().to_string();
@@ -277,7 +284,7 @@ fn the_no_checks_profile_runs_only_when_a_start_names_it() {
 fn a_permission_mode_claude_overrode_is_a_problem_the_caller_sees() {
     let bench = Bench::new("overridden");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &claude_stream_in("default", &[CLAUDE_SUCCESS]),
     );
     bench.start("job", "claude");
@@ -297,7 +304,7 @@ fn a_permission_mode_claude_overrode_is_a_problem_the_caller_sees() {
 #[test]
 fn the_agent_does_not_inherit_the_parent_session() {
     let bench = Bench::new("env");
-    bench.agent(CLAUDE_VERSION, &claude_stream(&[CLAUDE_SUCCESS]));
+    bench.agent(&claude_version(), &claude_stream(&[CLAUDE_SUCCESS]));
     bench.start("job", "claude");
     bench.ok(&["wait", "job"]);
     let env = bench.agent_env();
@@ -312,7 +319,7 @@ fn the_holder_outlives_its_callers_process_group() {
     let bench = Bench::new("detached");
     let done = bench.done_file.display().to_string();
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!(
             "sleep 1\n{}\ntouch '{done}'",
             claude_stream(&[CLAUDE_SUCCESS])
@@ -342,7 +349,10 @@ fn the_holder_outlives_its_callers_process_group() {
 #[test]
 fn a_lost_holder_is_an_error() {
     let bench = Bench::new("lost");
-    bench.agent(CLAUDE_VERSION, &format!("{}\n{LINGER}", claude_stream(&[])));
+    bench.agent(
+        &claude_version(),
+        &format!("{}\n{LINGER}", claude_stream(&[])),
+    );
     let started = bench.start("job", "claude");
     signal(&started["holder_pid"], libc::SIGKILL, false);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -391,7 +401,10 @@ fn a_lost_holder_is_an_error() {
 #[test]
 fn a_stop_after_a_lost_holder_spares_a_reused_group_id() {
     let bench = Bench::new("reused");
-    bench.agent(CLAUDE_VERSION, &format!("{}\n{LINGER}", claude_stream(&[])));
+    bench.agent(
+        &claude_version(),
+        &format!("{}\n{LINGER}", claude_stream(&[])),
+    );
     let started = bench.start("job", "claude");
     signal(&started["holder_pid"], libc::SIGKILL, false);
     signal(&started["agent_pid"], libc::SIGKILL, true);
@@ -437,14 +450,14 @@ fn a_stop_after_a_lost_holder_spares_a_reused_group_id() {
 #[test]
 fn a_continue_without_a_session_id_starts_fresh() {
     let bench = Bench::new("no-session");
-    bench.agent(CLAUDE_VERSION, "exit 1");
+    bench.agent(&claude_version(), "exit 1");
     bench.start("job", "claude");
     let failed = bench.ok(&["wait", "job"]);
     assert_eq!(
         (state(&failed), &failed["session_id"]),
         ("failed", &Value::Null)
     );
-    bench.agent(CLAUDE_VERSION, &claude_stream(&[CLAUDE_SUCCESS]));
+    bench.agent(&claude_version(), &claude_stream(&[CLAUDE_SUCCESS]));
     bench.ok(&["continue", "job", "--message", "again"]);
     let ended = bench.ok(&["wait", "job"]);
     assert_eq!(
@@ -464,7 +477,7 @@ fn an_open_that_writes_the_done_file_is_done() {
     let bench = Bench::new("open-done");
     let done = bench.done_file.display().to_string();
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!(
             "if [ \"$1\" = --resume ]; then touch '{done}'; exit 0; fi\n{}",
             claude_stream(&[CLAUDE_SUCCESS])
@@ -479,7 +492,7 @@ fn an_open_that_writes_the_done_file_is_done() {
 #[test]
 fn a_start_refuses_a_key_that_has_a_session() {
     let bench = Bench::new("taken");
-    bench.agent(CLAUDE_VERSION, &claude_stream(&[CLAUDE_SUCCESS]));
+    bench.agent(&claude_version(), &claude_stream(&[CLAUDE_SUCCESS]));
     bench.start("job", "claude");
     let done = bench.done_file.display().to_string();
     let refusal = bench.refused(&[
@@ -501,7 +514,7 @@ fn a_start_refuses_a_key_that_has_a_session() {
 fn a_bad_stream_line_is_a_problem_the_caller_sees() {
     let bench = Bench::new("bad-line");
     bench.agent(
-        CLAUDE_VERSION,
+        &claude_version(),
         &format!("echo 'not json'\n{}", claude_stream(&[CLAUDE_SUCCESS])),
     );
     bench.start("job", "claude");
@@ -516,7 +529,8 @@ fn a_bad_stream_line_is_a_problem_the_caller_sees() {
 #[test]
 fn another_cli_version_warns() {
     let bench = Bench::new("version");
-    bench.agent("2.2.0 (Claude Code)", &claude_stream(&[CLAUDE_SUCCESS]));
+    let (other, output) = other_claude_version();
+    bench.agent(&output, &claude_stream(&[CLAUDE_SUCCESS]));
     let done = bench.done_file.display().to_string();
     let output = bench.run(&[
         "start",
@@ -530,8 +544,9 @@ fn another_cli_version_warns() {
     ]);
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
+    let validated = RuntimeName::Claude.adapter().validated_version();
     assert!(
-        stderr.contains("\"2.2.0\"") && stderr.contains("2.1.285"),
+        stderr.contains(&format!("{other:?}")) && stderr.contains(validated),
         "{stderr}"
     );
 }

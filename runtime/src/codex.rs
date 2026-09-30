@@ -26,8 +26,10 @@ use serde_json::Value;
 
 use super::{Ended, Headless, Runtime, Seen, Turn, Watch};
 
-/// The codex version this adapter was validated against.
-pub const VALIDATED_VERSION: &str = "0.159.0";
+/// The codex version this adapter was validated against: the last one
+/// `make boundary` passed on. `make boundary` writes the file after every
+/// boundary test passed.
+const VALIDATED_VERSION: &str = include_str!("../validated/codex").trim_ascii();
 
 pub struct Codex;
 
