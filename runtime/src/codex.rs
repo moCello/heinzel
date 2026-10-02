@@ -26,9 +26,9 @@ use serde_json::Value;
 
 use super::{Ended, Headless, Runtime, Seen, Turn, Watch};
 
-/// The codex version this adapter was validated against: the last one
-/// `make boundary` passed on. `make boundary` writes the file after every
-/// boundary test passed.
+/// The codex version this adapter was validated against: the last one the
+/// codex boundary test passed on. `cargo xtask validate` writes the file
+/// after that test passed, and `make boundary` runs it.
 const VALIDATED_VERSION: &str = include_str!("../validated/codex").trim_ascii();
 
 pub struct Codex;

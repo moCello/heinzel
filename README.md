@@ -154,8 +154,32 @@ when the installed CLI is not the version heinzel was validated against.
     make boundary  # the real claude and codex CLIs: uses your usage
 
 heinzel runs on any version of claude and codex. On a version it was not
-validated against, it warns. A version is validated when `make boundary`
-passes on it. When every boundary test passes, `make boundary` writes the
-version of each CLI on `PATH` to `runtime/validated/<runtime>`, and the next
-build compiles it in. So a new CLI release needs one `make boundary` and a
-commit of those files, not a change to the code.
+validated against, it warns. A version is validated when the boundary test
+of its CLI passes on it. When every boundary test passes, `make boundary`
+writes the version of each CLI on `PATH` to `runtime/validated/<runtime>`,
+and the next build compiles it in. So a new CLI release needs a boundary run
+and a commit of those files, not a change to the code.
+
+### Validate a new CLI release
+
+    cargo xtask validate
+
+The command reads the version of each CLI on `PATH`, and skips a CLI that
+is not on `PATH`. It runs the boundary test only of a CLI whose version
+`runtime/validated/` does not hold. When
+every test it ran passes, it writes the new versions there. When the record
+holds every installed version, it runs no test and uses no usage. It asks
+nothing, so a job can run it unattended. It never commits or pushes: the
+caller commits the record.
+
+| Exit | Meaning |
+|---|---|
+| 0 | The record holds the version of every installed CLI. stdout lists each record file the command changed, one path per line. |
+| 1 | A boundary test failed. The record is as it was. stderr names the CLI and the test. |
+| 2 | The command could not do its check, for example on a CLI whose `--version` fails. The record is as it was, unless stderr names the record files the command replaced before an error. |
+
+Any other exit code means that cargo could not build or run the command.
+
+A test that fails stops the run, and the tests after it do not run. The
+record changes only when every test that ran passed. `make boundary` runs
+`cargo xtask validate --all`, which runs the test of every installed CLI.

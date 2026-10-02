@@ -6,9 +6,10 @@ description = "Runs headless agent sessions: one turn for a caller that waits, o
 publish = false
 
 # The adapters for each agent CLI live in a crate of their own. The binary and
-# the library both run them, and neither exports them.
+# the library both run them, and neither exports them. `xtask` holds the
+# repository's own tasks, such as `cargo xtask validate`.
 [workspace]
-members = ["runtime"]
+members = ["runtime", "xtask"]
 
 [dependencies]
 heinzel-runtime = { path = "runtime" }

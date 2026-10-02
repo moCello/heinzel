@@ -10,8 +10,10 @@
 //! One test per runtime runs every scenario for that runtime. When all of
 //! them pass, the test writes the version of the CLI on `PATH` to the
 //! directory that `$BOUNDARY_RECORD` names, when it names one. After every
-//! test passed, `make boundary` copies that record to `runtime/validated/`.
-//! The adapter compiles it in as the version it was validated against.
+//! test it ran passed, `cargo xtask validate` copies that record to
+//! `runtime/validated/`. The adapter compiles it in as the version it was
+//! validated against. The task runs each test by its name,
+//! `the_<runtime>_adapter_holds`.
 //!
 //! A usage limit is not provoked here. Its classification rests on the unit
 //! tests and the stub tests.

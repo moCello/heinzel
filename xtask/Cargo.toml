@@ -1,0 +1,9 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+description = "The repository's own tasks: `cargo xtask validate` runs the boundary tests on a new CLI release."
+publish = false
+
+[dependencies]
+heinzel-runtime = { path = "../runtime" }

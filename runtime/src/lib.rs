@@ -40,6 +40,9 @@ pub enum RuntimeName {
 }
 
 impl RuntimeName {
+    /// Every runtime.
+    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+
     pub fn parse(text: &str) -> Result<Self, String> {
         match text {
             "claude" => Ok(Self::Claude),
@@ -106,7 +109,7 @@ pub enum Ended {
 /// One agent CLI.
 pub trait Runtime: Sync {
     /// The CLI version this adapter was validated against: the last one
-    /// `make boundary` passed on.
+    /// the boundary test of this CLI passed on.
     fn validated_version(&self) -> &'static str;
 
     /// The arguments of a headless run. A run this CLI cannot do as asked is
@@ -267,7 +270,7 @@ mod tests {
 
     #[test]
     fn each_validated_version_is_a_version_number() {
-        for runtime in [RuntimeName::Claude, RuntimeName::Codex] {
+        for runtime in RuntimeName::ALL {
             let validated = runtime.adapter().validated_version();
             assert_eq!(version_number(validated), Some(validated), "{runtime:?}");
         }

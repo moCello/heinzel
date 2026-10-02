@@ -31,9 +31,9 @@ const MODE_FLAG: &str = "--permission-mode";
 const SKIP_FLAG: &str = "--dangerously-skip-permissions";
 const SKIP_MODE: &str = "bypassPermissions";
 
-/// The claude version this adapter was validated against: the last one
-/// `make boundary` passed on. `make boundary` writes the file after every
-/// boundary test passed.
+/// The claude version this adapter was validated against: the last one the
+/// claude boundary test passed on. `cargo xtask validate` writes the file
+/// after that test passed, and `make boundary` runs it.
 const VALIDATED_VERSION: &str = include_str!("../validated/claude").trim_ascii();
 
 pub struct Claude;
